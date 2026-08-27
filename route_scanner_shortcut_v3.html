@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>Route Lookup</title>
+<style>
+:root{--bg:#0f172a;--panel:#111827;--line:#334155;--txt:#f8fafc;--muted:#94a3b8;--green:#16a34a;--yellow:#d97706;--red:#dc2626;--blue:#2563eb}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--txt);font-family:Arial,Helvetica,sans-serif}
+.wrap{max-width:720px;margin:auto;padding:16px 14px 34px}
+h1{font-size:24px;margin:4px 0}.sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
+.title{display:block;font-weight:800;margin-bottom:8px}
+input[type=file]{width:100%;font-size:16px}
+#manual{width:100%;border-radius:12px;border:2px solid var(--blue);padding:14px;font-size:20px;margin-top:8px}
+button{width:100%;border:0;border-radius:14px;padding:15px;font-size:18px;font-weight:900;color:white;background:var(--blue);margin-top:9px}
+button.secondary{background:#334155}
+#result{min-height:300px;border:2px solid var(--line);border-radius:18px;padding:22px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
+.route{font-size:62px;line-height:.98;font-weight:1000;word-break:break-word}
+.state{font-size:20px;font-weight:900;margin-top:12px}
+.order{font-size:22px;font-weight:800;margin-top:16px}
+.name{font-size:18px;margin-top:8px}
+.addr{font-size:14px;color:#cbd5e1;margin-top:6px}
+.green{background:rgba(22,163,74,.16);border-color:var(--green)!important}.green .route,.green .state{color:#4ade80}
+.yellow{background:rgba(217,119,6,.16);border-color:var(--yellow)!important}.yellow .route,.yellow .state{color:#fbbf24}
+.red{background:rgba(220,38,38,.16);border-color:var(--red)!important}.red .route,.red .state{color:#f87171}
+.blue{background:rgba(37,99,235,.12);border-color:var(--blue)!important}.blue .route,.blue .state{color:#60a5fa}
+.status{font-size:13px;color:var(--muted);margin-top:7px}.good{color:#4ade80}.bad{color:#f87171}
+.small{font-size:12px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Route Lookup</h1>
+  <div class="sub">Shortcut scan → current Descartes route → stage → final manifest verification</div>
+
+  <div class="card">
+    <span class="title">Today's Descartes routes</span>
+    <input id="csvFile" type="file" accept=".csv,text/csv">
+    <div id="fileStatus" class="status">Checking saved route file…</div>
+    <button id="clearBtn" class="secondary">CLEAR SAVED ROUTES</button>
+    <div class="small">The route table is stored only in this browser's local storage on this device.</div>
+  </div>
+
+  <div class="card">
+    <span class="title">Manual lookup</span>
+    <input id="manual" placeholder="S6173898.016" autocomplete="off" autocapitalize="characters">
+    <button id="lookupBtn">LOOK UP ORDER</button>
+  </div>
+
+  <div id="result" class="blue">
+    <div class="route">READY</div>
+    <div class="state">LOAD TODAY'S CSV ONCE</div>
+  </div>
+</div>
+
+<script>
+let lookup=new Map();
+
+function parseCSV(text){
+  const rows=[];let row=[],field="",q=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i],n=text[i+1];
+    if(q){if(c=='"'&&n=='"'){field+='"';i++;}else if(c=='"'){q=false}else field+=c}
+    else{if(c=='"')q=true;else if(c==','){row.push(field);field=""}else if(c=='\n'){row.push(field);rows.push(row);row=[];field=""}else if(c!='\r')field+=c}
+  }
+  if(field.length||row.length){row.push(field);rows.push(row)} return rows;
+}
+const norm=s=>(s||"").trim().toUpperCase();
+const esc=s=>String(s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
+
+function render(cls,route,state,rec={}){
+  const r=document.getElementById("result");r.className=cls;
+  const addr=[rec.address,rec.city,rec.state,rec.zip].filter(Boolean).join(", ");
+  r.innerHTML=`<div class="route">${esc(route)}</div><div class="state">${esc(state)}</div>
+    ${rec.order?`<div class="order">${esc(rec.order)}</div>`:""}
+    ${rec.name?`<div class="name">${esc(rec.name)}</div>`:""}
+    ${addr?`<div class="addr">${esc(addr)}</div>`:""}`;
+  try{navigator.vibrate && navigator.vibrate(cls==="green"?100:[160,80,160]);}catch(e){}
+}
+
+function rebuildMap(records){
+  lookup=new Map();
+  for(const rec of records){
+    if(!lookup.has(rec.order))lookup.set(rec.order,[]);
+    lookup.get(rec.order).push(rec);
+  }
+}
+
+function lookupOrder(raw){
+  const order=norm(raw);
+  if(!order)return;
+  if(!lookup.size){
+    render("red","NO ROUTES","LOAD TODAY'S CSV FIRST",{order});
+    return;
+  }
+  const rows=lookup.get(order)||[];
+  if(!rows.length){
+    render("yellow","NOT ROUTED","HOLD / DO NOT STAGE",{order});
+    return;
+  }
+  const routes=[...new Set(rows.map(r=>r.route).filter(Boolean))];
+  if(routes.length===0){
+    render("yellow","NOT ROUTED","NO ROUTE IN EXPORT",rows[0]);
+  }else if(routes.length>1){
+    render("red","CHECK","MULTIPLE ROUTES: "+routes.join(" / "),rows[0]);
+  }else{
+    render("green",routes[0],"STAGE TO THIS ROUTE",rows[0]);
+  }
+}
+
+function loadSaved(){
+  try{
+    const raw=localStorage.getItem("descartesRouteDataV1");
+    const meta=localStorage.getItem("descartesRouteMetaV1");
+    if(raw){
+      const records=JSON.parse(raw);
+      rebuildMap(records);
+      const info=meta?JSON.parse(meta):{};
+      document.getElementById("fileStatus").innerHTML=
+        `<span class="good">✓ Saved routes loaded${info.name?": "+esc(info.name):""} — ${records.length} rows</span>`;
+      render("blue","READY","SCAN WITH SHORTCUT OR LOOK UP");
+      return true;
+    }
+  }catch(e){}
+  document.getElementById("fileStatus").textContent="No saved route file. Load today's CSV once.";
+  return false;
+}
+
+document.getElementById("csvFile").addEventListener("change",async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const rows=parseCSV(await f.text()), headers=rows[0].map(x=>x.trim()), ix={};
+  headers.forEach((h,i)=>ix[h.toLowerCase()]=i);
+  const oi=ix["order #"],ri=ix["route"],ni=ix["name"],ai=ix["address"],ci=ix["city"],si=ix["state/province"],zi=ix["zip/postal code"];
+  if(oi===undefined||ri===undefined){alert('Need columns "Order #" and "Route".');return}
+  const records=[];
+  for(let i=1;i<rows.length;i++){
+    const c=rows[i],order=norm(c[oi]);if(!order)continue;
+    records.push({
+      order,route:norm(c[ri]),
+      name:ni===undefined?"":(c[ni]||"").trim(),
+      address:ai===undefined?"":(c[ai]||"").trim(),
+      city:ci===undefined?"":(c[ci]||"").trim(),
+      state:si===undefined?"":(c[si]||"").trim(),
+      zip:zi===undefined?"":(c[zi]||"").trim()
+    });
+  }
+  rebuildMap(records);
+  try{
+    localStorage.setItem("descartesRouteDataV1",JSON.stringify(records));
+    localStorage.setItem("descartesRouteMetaV1",JSON.stringify({name:f.name,loadedAt:new Date().toISOString()}));
+  }catch(err){alert("Could not save route data on this device. Browser storage may be restricted.");}
+  document.getElementById("fileStatus").innerHTML=`<span class="good">✓ ${esc(f.name)} saved — ${records.length} rows</span>`;
+  render("blue","READY","SCAN WITH SHORTCUT OR LOOK UP");
+});
+
+document.getElementById("clearBtn").onclick=()=>{
+  localStorage.removeItem("descartesRouteDataV1");localStorage.removeItem("descartesRouteMetaV1");
+  lookup=new Map();
+  document.getElementById("fileStatus").textContent="No saved route file. Load today's CSV once.";
+  render("blue","READY","LOAD TODAY'S CSV");
+};
+
+document.getElementById("lookupBtn").onclick=()=>lookupOrder(document.getElementById("manual").value);
+document.getElementById("manual").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();lookupOrder(e.target.value)}});
+
+const hadSaved=loadSaved();
+const params=new URLSearchParams(location.search);
+const orderParam=params.get("order");
+if(orderParam){
+  document.getElementById("manual").value=orderParam;
+  setTimeout(()=>lookupOrder(orderParam),100);
+}
+</script>
+</body>
+</html>
